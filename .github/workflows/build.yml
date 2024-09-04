@@ -6,7 +6,7 @@ on:
 jobs:
   rubocop:
     name: Lint (Rubocop)
-    runs-on: ubuntu-20.04
+    runs-on: ['debian-12', 'hetzner']
     container: ruby:3.1
     steps:
      - name: Checkout
@@ -17,7 +17,7 @@ jobs:
        run: bundle exec rubocop -f simple
   shellcheck:
     name: Lint (Shellcheck)
-    runs-on: ubuntu-20.04
+    runs-on: ['debian-12', 'hetzner']
     container: debian:10
     steps:
      - name: Checkout
@@ -30,7 +30,7 @@ jobs:
     name: Build (ruby)
     outputs:
       GEM_VERSION: ${{ steps.set-metadata.outputs.GEM_VERSION }}
-    runs-on: ubuntu-20.04
+    runs-on: ['debian-12', 'hetzner']
     container: ruby:3.1
     steps:
       - name: Update Rubygems and Bundler
@@ -72,78 +72,6 @@ jobs:
         with:
           name: gem-${{ steps.set-metadata.outputs.GEM_VERSION  }}-ruby
           path: pkg
-  build-darwin:
-    strategy:
-      fail-fast: false
-      matrix:
-        platform:
-          - x86_64
-          - arm64
-    name: Build (darwin)
-    outputs:
-      GEM_VERSION: ${{ steps.set-metadata.outputs.GEM_VERSION }}
-    runs-on: macos-12
-    env:
-      TARGET_PLATFORM: ${{ matrix.platform }}-darwin
-      RUBY_TARGET_PLATFORM: ${{ matrix.platform }}-darwin
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-      - name: Bundle
-        run: bundle install
-      - name: Set metadata
-        id: set-metadata
-        run: |
-            ./libexec/metadata ruby_platform | tee ruby_platform
-            echo "::set-output name=RUBY_PLATFORM::$(cat ruby_platform)"
-            ./libexec/metadata gem_platform | tee gem_platform
-            echo "::set-output name=GEM_PLATFORM::$(cat gem_platform)"
-            ./libexec/metadata gem_version | tee gem_version
-            echo "::set-output name=GEM_VERSION::$(cat gem_version)"
-            ./libexec/metadata node_version | tee node_version
-            echo "::set-output name=NODE_VERSION::$(cat node_version)"
-            ./libexec/metadata libv8_version | tee libv8_version
-            echo "::set-output name=LIBV8_VERSION::$(cat libv8_version)"
-      - name: Download Node.js
-        run: |
-            ./libexec/download-node ${{ steps.set-metadata.outputs.NODE_VERSION }}
-      - name: Extract Node.js
-        run: |
-            ./libexec/extract-node ${{ steps.set-metadata.outputs.NODE_VERSION }}
-      - name: Validate V8 version
-        run: |
-            ./libexec/metadata libv8_version_h | tee libv8_version_h
-            diff libv8_version_h libv8_version
-      - name: Build V8
-        run: |
-            ./libexec/build-libv8 ${{ steps.set-metadata.outputs.NODE_VERSION }}
-      - name: Build Monolith
-        run: |
-            ./libexec/build-monolith ${{ steps.set-metadata.outputs.NODE_VERSION }}
-      - name: Inject V8
-        run: |
-            ./libexec/inject-libv8 ${{ steps.set-metadata.outputs.NODE_VERSION }}
-      - name: Test V8 in C++
-        if: matrix.platform != 'arm64'
-        run: |
-            cd test/gtest
-            cmake -S . -B build
-            cd build
-            cmake --build .
-            ./c_v8_tests
-      - name: Build binary gem
-        run: |
-            bundle exec rake binary
-      - name: Upload V8
-        uses: actions/upload-artifact@v1
-        with:
-          name: v8-${{ steps.set-metadata.outputs.LIBV8_VERSION  }}-${{ steps.set-metadata.outputs.GEM_PLATFORM }}
-          path: vendor
-      - name: Upload gem
-        uses: actions/upload-artifact@v1
-        with:
-          name: gem-${{ steps.set-metadata.outputs.GEM_VERSION  }}-${{ steps.set-metadata.outputs.GEM_PLATFORM }}
-          path: pkg
   build-linux:
     strategy:
       fail-fast: false
@@ -162,7 +90,7 @@ jobs:
     name: Build (linux)
     outputs:
       GEM_VERSION: ${{ steps.set-metadata.outputs.GEM_VERSION }}
-    runs-on: ubuntu-20.04
+    runs-on: ['debian-12', 'hetzner']
     steps:
       - name: Set cross-compilation platform
         id: platform
@@ -311,7 +239,7 @@ jobs:
             libc: musl
     name: Test (ruby) (${{ matrix.container.version }}, ${{ matrix.platform }}, ${{ matrix.container.libc }})
     needs: build-ruby
-    runs-on: ubuntu-20.04
+    runs-on: ['debian-12', 'hetzner']
     container: ${{ matrix.container.image }}
     steps:
       - name: Install Alpine system dependencies
@@ -347,42 +275,6 @@ jobs:
           bundle install
           bundle exec rake compile
           bundle exec rake test
-  test-darwin:
-    strategy:
-      fail-fast: false
-      matrix:
-        platform:
-          - x86_64
-          # arm64
-    name: Test (darwin)
-    needs: build-darwin
-    runs-on: macos-12
-    steps:
-      - name: Set metadata
-        id: set-metadata
-        run: |
-            ruby -e 'puts Gem.platforms.last.to_s.gsub(/-darwin-?\d+/, "-darwin")' | tee gem_platform
-            echo "::set-output name=GEM_PLATFORM::$(cat gem_platform)"
-      - name: Download a single artifact
-        uses: actions/download-artifact@v2
-        with:
-          name: gem-${{ needs.build-darwin.outputs.GEM_VERSION }}-${{ steps.set-metadata.outputs.GEM_PLATFORM }}
-          path: pkg
-      - name: Install gem
-        run: gem install pkg/libv8-node-${{ needs.build-darwin.outputs.GEM_VERSION }}-${{ steps.set-metadata.outputs.GEM_PLATFORM }}.gem
-      - name: Test with mini_racer
-        run: |
-          git clone https://github.com/rubyjs/mini_racer.git test/mini_racer --depth 1
-          cd test/mini_racer
-          git fetch origin refs/pull/299/head
-          git checkout FETCH_HEAD
-          git reset --hard
-          git clean -f -d -x
-          ruby -i -ne '$_ =~ /^\s+LIBV8_NODE_VERSION/ ? print("  LIBV8_NODE_VERSION = \"${{ needs.build-darwin.outputs.GEM_VERSION }}\"\n") : print' lib/mini_racer/version.rb
-          ruby -i -ne '$_ =~ /spec.required_ruby_version/ ? "" : print' mini_racer.gemspec
-          bundle install
-          bundle exec rake compile
-          bundle exec rake test
   test-linux:
     strategy:
       fail-fast: false
@@ -412,7 +304,7 @@ jobs:
             libc: 'gnu'
     name: Test (linux)
     needs: build-linux
-    runs-on: ubuntu-20.04
+    runs-on: ['debian-12', 'hetzner']
     steps:
       - name: Enable ${{ matrix.platform }} platform
         id: qemu
